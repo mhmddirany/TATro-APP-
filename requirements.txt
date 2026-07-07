@@ -1,0 +1,9 @@
+faster-whisper
+pyannote.audio
+transformers>=4.51
+pandas
+torch
+arabic-reshaper
+python-bidi
+reportlab
+gradio

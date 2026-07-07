@@ -45,37 +45,47 @@ Lets the user upload the .mp4 (or point to one already in Drive), pick the spoke
 ## Requirements
 
 ```
-pip install -U transformers
-pip install faster-whisper pyannote.audio pandas torch \
-    arabic-reshaper python-bidi reportlab gradio
+pip install -r requirements.txt
 ```
 
-(`-U transformers` matters — Qwen3.5 needs a reasonably recent version.)
-
-Also needs:
+Also needs, whether running locally or in Colab:
 
 - `ffmpeg` on PATH
-- DejaVu fonts at `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` (install `fonts-dejavu-core` if missing)
+- DejaVu fonts installed somewhere findable (`apt-get install fonts-dejavu-core` on Linux/Colab; on Windows/Mac, download DejaVu Sans from dejavu-fonts.github.io) — `translation.py` searches a few common font locations and raises a clear error telling you where to put it if it can't find one
 - A Hugging Face token with access to `pyannote/speaker-diarization-3.1` (accept the model's terms on the HF site first)
 
 ## How to run
 
-Recommended — the GUI (in Colab, paste each file into its own cell: app.py first, then transcription.py, then translation.py):
+### Locally
 
 ```
+pip install -r requirements.txt
+export HF_TOKEN=your_token_here          # (Windows PowerShell: $env:HF_TOKEN="your_token_here")
 python app.py
 ```
 
-It prints a link — open it, upload your video, pick the spoken language, adjust the merge count if you want, paste in your HF token, and click Run. When it's done, download the PDF or view it inline on the same page.
+This prints a local URL (and a public one, since `share=True`) — open it, upload your video, pick the spoken language, adjust the merge count if you want, and click Run. When it's done, download the PDF or view it inline on the same page. If you don't pass an HF token in the browser field, it picks up the `HF_TOKEN` environment variable automatically.
 
-Or from the command line, without the GUI:
+Prefer the command line, no GUI at all:
 
 ```
-export HF_TOKEN=your_token_here
-python main.py --input "/path/to/video.mp4" --language he --merge 3
+python main.py --input "/path/to/video.mp4" --language he --target ar --merge 3
 ```
 
-**Security note:** never paste a real Hugging Face token into a chat — set it directly in your terminal or the GUI's token field.
+Run `python main.py --help` for all the flags, or just run `python main.py` with no flags to be prompted for each choice interactively.
+
+### In Colab
+
+Paste each file into its own cell and run them in this order: `app.py`, `transcription.py`, `translation.py` (`main.py` only if you want the no-GUI version instead). Install system + Python dependencies in a cell before that:
+
+```
+!apt-get -qq update && apt-get -qq install -y ffmpeg fonts-dejavu-core
+!pip install -q -r requirements.txt
+```
+
+Add your token to Colab Secrets as `HF_TOKEN`, or paste it into the GUI's token field.
+
+**Security note:** never paste a real Hugging Face token into a chat — set it as an environment variable, in Colab Secrets, or directly in the GUI's token field.
 
 ## Model notes
 
