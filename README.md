@@ -1,42 +1,90 @@
-# TATRO App
+# Video Translation Pipeline
 
-Same 5-cell structure as your original notebook, plus two GUI additions in the app cell: the video input now plays inline as soon as you upload it, and there's a small chat panel at the bottom wired to an empty placeholder function.
+Takes an .mp4 video, transcribes the speech with Whisper, corrects and translates it into Arabic with Qwen, and produces a speaker-labeled PDF — plus a JSON file meant for later embedding & retrieval.
 
-## Files — one per Colab cell
+**Pipeline:** mp4 → diarize + Whisper transcribe → batch same-speaker chunks → Qwen correct → Qwen translate (into Arabic) → save JSON + PDF
 
-- `01_imports.py` — Cell 1: apt/pip installs + all imports.
-- `02_transcription.py` — Cell 2: language dictionary, audio/diarization helpers, Whisper transcription, `run_transcription(...)`.
-- `03_translation.py` — Cell 3: Qwen translation, PDF export, `run_translation(...)`.
-- `04_main.py` — Cell 4: `main()` — runs the pipeline directly with `input()` prompts, no GUI. Optional if you're only using the Gradio app.
-- `05_app_gradio.py` — Cell 5: the Gradio GUI (`process_job`, the two new GUI pieces, `demo.launch(...)`).
-- `app_preview.py` — standalone, dependency-light copy of the same layout with processing mocked out, for a quick look at the UI without loading Whisper/pyannote/Qwen.
+## Files and what each one does
 
-## How to use
+### transcription.py — Stage 1
 
-1. Open your Colab notebook, one cell per file above, in order (1 → 5).
-2. Paste each file's contents into its own cell and run top to bottom.
-3. Cell 4 (`main()`) is optional — skip it if you only want the Gradio app. Cell 5 only needs `LANGUAGES`, `run_transcription`, and `run_translation` from Cells 1–3.
-4. In Cell 5, click the public Gradio link it prints. Upload an mp4 — it now plays right in the browser instead of just showing a filename. Scroll down to "Assistant (stub)" to see the chat box.
+Input: path to an .mp4 file and the spoken language. Extracts audio, runs speaker diarization (pyannote), cleans up the diarization internally (fixed, not user-configurable), splits into Whisper-sized chunks, and transcribes each chunk with Whisper.
 
-### What changed in Cell 5, specifically
+Output: `<video_name>_transcript.json`, saved in the same folder as the mp4 — one entry per chunk with `speaker`, `speaker_number`, `start`, `end`, `duration`, and the raw transcription.
 
-- `video_input = gr.File(...)` → `video_input = gr.Video(...)`. `process_job` already did `Path(video_file if isinstance(video_file, str) else video_file.name)`, and `gr.Video` returns a plain filepath string, so no other code needed to change.
-- Added `chatbot_stub(message, history)` and a `gr.Chatbot` + textbox + Send button wired to it. Right now `chatbot_stub` just returns `""` for every message — it's a hook, not a feature. To make it do something, edit the `response = ""` line in that function (e.g. call Qwen, look something up in `dataset_df`, etc.).
+### translation.py — Stage 2
 
-### Small fix folded in
+Input: the transcript JSON from Stage 1, plus "number of merge" (default 3). Groups up to that many consecutive same-speaker chunks into one block (fewer, longer calls instead of one call per tiny chunk), then for each block:
 
-`run_transcription` (Cell 2) calls `gc.collect()` a few times to free GPU memory between model loads — `01_imports.py` now includes `import gc` up front so that's defined before it's needed.
+1. **Correction** — Qwen fixes obvious ASR errors in the raw text.
+2. **Translation** — Qwen translates the corrected text into Arabic (the app always translates to Arabic; if the spoken language already is Arabic, this step is skipped and the corrected text is used as-is).
 
-## How to use `app_preview.py` (optional, just for looking)
+Output, both saved in the same folder as the mp4:
 
-Run locally or in any Python environment with `pip install gradio`:
+- `<video_name>_translated.json` — speaker, start, end, duration, `source_text` (raw), `corrected_text`, `target_text` (Arabic) for every merged block. This is the file used later for embedding & retrieval.
+- `<video_name>_arabic_final.pdf` — the Arabic translation, labeled "Speaker 1", "Speaker 2", etc. (no timestamps in the PDF).
+
+### main.py — orchestrator
+
+Input: mp4 path, spoken language code (he/ar/en/fr), and merge count. Calls `transcription.transcribe_video()` then `translation.translate_transcript()` in order, reporting progress through the whole pipeline as one 0–100% callback.
+
+Output: the translated JSON path (for embedding/retrieval) and the PDF path.
+
+Can also be run directly from the command line for testing:
 
 ```
-python app_preview.py
+python main.py --input "/path/to/video.mp4" --language he --merge 3
 ```
 
-It opens the same layout, but the Run button doesn't call your real pipeline — it just prints back what you selected. Useful for checking the layout without GPU/models/HF token.
+### GUI.py — desktop app (Tkinter)
 
-## Known limitation
+Lets the user browse for the .mp4, pick the spoken language from a dropdown, set the merge count, and enter a Hugging Face token. Runs the pipeline in a background thread so the window stays responsive, shows a progress bar with the current step ("Extracting audio", "Diarizing speakers", "Transcribing chunk 4/12", "Correcting & translating block 2/5", "Building final PDF", ...), and when finished shows a confirmation message and automatically opens the resulting PDF.
 
-I couldn't host a live, clickable link for this from my side — my sandbox kills background processes as soon as each command finishes, which doesn't work for a server that needs to stay up. Colab doesn't have that restriction, so `gradio_cell_updated.py` will work normally there with `share=True`.
+**This is the file most users should run.**
+
+## Requirements
+
+```
+pip install -U transformers
+pip install faster-whisper pyannote.audio pandas torch \
+    arabic-reshaper python-bidi reportlab
+```
+
+(`-U transformers` matters — Qwen3.5 needs a reasonably recent version.)
+
+Also needs:
+
+- `ffmpeg` on PATH
+- `python3-tk` for the GUI and file/folder dialogs (ships with most Python installs; on Linux you may need `sudo apt-get install python3-tk`)
+- DejaVu fonts at `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` (install `fonts-dejavu-core` if missing)
+- A Hugging Face token with access to `pyannote/speaker-diarization-3.1` (accept the model's terms on the HF site first)
+
+## How to run
+
+Recommended — the GUI:
+
+```
+python GUI.py
+```
+
+Browse to your video, pick the spoken language, adjust the merge count if you want, paste in your HF token, and click Run. When it's done, the PDF opens automatically.
+
+Or from the command line, without the GUI:
+
+```
+export HF_TOKEN=your_token_here
+python main.py --input "/path/to/video.mp4" --language he --merge 3
+```
+
+**Security note:** never paste a real Hugging Face token into a chat — set it directly in your terminal or the GUI's token field.
+
+## Model notes
+
+- Whisper: `large-v3` (see `DEFAULT_CONFIG` in main.py).
+- Correction + translation: `Qwen/Qwen3.5-4B` — chosen over the smaller Qwen2.5-3B after Arabic translation quality came out weak with it; Qwen3+ expanded multilingual coverage from 29 to 119 languages, which helps a lot for Arabic specifically. Qwen3.5 "thinks" by default, so generation explicitly disables that (`enable_thinking=False`) and any leaked `<think>` tags get stripped defensively.
+- Both `transcribe_video()` and `translate_transcript()` fall back to CPU automatically on GPUs too old for the installed PyTorch/cuDNN build (see `cuda_is_usable()` in transcription.py) instead of crashing.
+- Stray CJK characters Qwen sometimes leaks into output are stripped before saving/PDF-building, since the PDF font has no glyphs for them.
+
+## Notes on "number of merge"
+
+This controls how many consecutive same-speaker chunks get combined into one block before running correction + translation on it — a merge count of 3 means at most 3 chunks per Qwen call. Higher = fewer, longer Qwen calls (faster overall, less granular speaker turns in the output); lower = more, shorter calls (slower, finer-grained). This is separate from the diarization-level speaker-island smoothing in transcription.py, which is fixed internally and not user-configurable.
