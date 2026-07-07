@@ -36,9 +36,9 @@ Can also be run directly from the command line for testing:
 python main.py --input "/path/to/video.mp4" --language he --merge 3
 ```
 
-### GUI.py — desktop app (Tkinter)
+### app.py — the GUI (Gradio, not a desktop app)
 
-Lets the user browse for the .mp4, pick the spoken language from a dropdown, set the merge count, and enter a Hugging Face token. Runs the pipeline in a background thread so the window stays responsive, shows a progress bar with the current step ("Extracting audio", "Diarizing speakers", "Transcribing chunk 4/12", "Correcting & translating block 2/5", "Building final PDF", ...), and when finished shows a confirmation message and automatically opens the resulting PDF.
+Lets the user upload the .mp4 (or point to one already in Drive), pick the spoken language from a dropdown, set the merge count, and enter a Hugging Face token. Runs the pipeline and streams status updates as it goes ("Extracting audio, diarizing, transcribing with Whisper...", "Translating with Qwen and building the PDF...", ...). Once finished, the PDF is downloadable and also previewable right in the page (inline viewer + "open in a new tab" link) — there's no separate desktop window or auto-opening file, it's all in the browser.
 
 **This is the file most users should run.**
 
@@ -47,7 +47,7 @@ Lets the user browse for the .mp4, pick the spoken language from a dropdown, set
 ```
 pip install -U transformers
 pip install faster-whisper pyannote.audio pandas torch \
-    arabic-reshaper python-bidi reportlab
+    arabic-reshaper python-bidi reportlab gradio
 ```
 
 (`-U transformers` matters — Qwen3.5 needs a reasonably recent version.)
@@ -55,19 +55,18 @@ pip install faster-whisper pyannote.audio pandas torch \
 Also needs:
 
 - `ffmpeg` on PATH
-- `python3-tk` for the GUI and file/folder dialogs (ships with most Python installs; on Linux you may need `sudo apt-get install python3-tk`)
 - DejaVu fonts at `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` (install `fonts-dejavu-core` if missing)
 - A Hugging Face token with access to `pyannote/speaker-diarization-3.1` (accept the model's terms on the HF site first)
 
 ## How to run
 
-Recommended — the GUI:
+Recommended — the GUI (in Colab, paste each file into its own cell: app.py first, then transcription.py, then translation.py):
 
 ```
-python GUI.py
+python app.py
 ```
 
-Browse to your video, pick the spoken language, adjust the merge count if you want, paste in your HF token, and click Run. When it's done, the PDF opens automatically.
+It prints a link — open it, upload your video, pick the spoken language, adjust the merge count if you want, paste in your HF token, and click Run. When it's done, download the PDF or view it inline on the same page.
 
 Or from the command line, without the GUI:
 
