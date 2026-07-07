@@ -1,10 +1,22 @@
 # ============================================================
 # app.py
-# Installs everything, imports everything, and builds/launches the
-# Gradio GUI. This is the file that should be run FIRST in a Colab
-# session (it defines every import that transcription.py, translation.py,
-# and main.py rely on) — after running it, run transcription.py, then
-# translation.py, then (optionally) main.py.
+# Builds and launches the Gradio GUI. Works two ways:
+#
+#   Locally / as a real script:
+#       pip install -r requirements.txt   (once)
+#       python app.py
+#   (needs transcription.py and translation.py in the same folder —
+#   they're imported below, not pasted as separate cells.)
+#
+#   In Colab:
+#       Paste this file into its own cell and run it, then paste
+#       transcription.py and translation.py into their own cells too
+#       (any order for those two, but run this one to install deps
+#       and build the UI before you click Run in the app itself).
+#       Installs aren't run automatically here anymore — run this
+#       first in its own cell if you're in Colab:
+#           !apt-get -qq update && apt-get -qq install -y ffmpeg fonts-dejavu-core
+#           !pip install -q -r requirements.txt
 #
 # Extras on top of the plain pipeline:
 #   1. The video input is a gr.Video, so an uploaded mp4 plays
@@ -19,40 +31,27 @@
 # Uses Qwen2.5-7B-Instruct (bumped up from 2.5-3B) to match what
 # main.py uses — better quality, slower/more VRAM.
 # ============================================================
-!apt-get -qq update && apt-get -qq install -y ffmpeg fonts-dejavu-core
-!pip install -q faster-whisper pyannote.audio transformers pandas torch \
-    arabic-reshaper python-bidi reportlab gradio
-
 import os
-import re
 import json
-import subprocess
-import tempfile
-import gc
 from pathlib import Path
-from html import escape
 
-import torch
 import pandas as pd
-from google.colab import drive, userdata
-from pyannote.audio import Pipeline
-from faster_whisper import WhisperModel
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import arabic_reshaper
-from bidi.algorithm import get_display
-
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm
-from reportlab.lib.enums import TA_RIGHT, TA_LEFT
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-
 import gradio as gr
 
-drive.mount("/content/drive")
+from transcription import LANGUAGES, run_transcription
+from translation import run_translation
+
+try:
+    from google.colab import drive, userdata
+    IN_COLAB = True
+except ImportError:
+    IN_COLAB = False
+
+if IN_COLAB:
+    drive.mount("/content/drive")
+
+DEFAULT_OUTPUT_DIR = "/content/drive/MyDrive/fypoutput/" if IN_COLAB else str(Path.cwd() / "fypoutput")
+ALLOWED_PDF_PATHS = ["/content/drive/MyDrive/"] if IN_COLAB else [str(Path.cwd())]
 
 def get_lang_by_name(name):
     for lang in LANGUAGES.values():
@@ -65,6 +64,18 @@ def derive_stem_from_dataset_json(path: Path):
     if stem.endswith("_transcript_dataset"):
         stem = stem[: -len("_transcript_dataset")]
     return stem
+
+def get_hf_token(cli_token=None):
+    if cli_token:
+        return cli_token.strip()
+    if IN_COLAB:
+        try:
+            token = userdata.get("HF_TOKEN")
+            if token:
+                return token
+        except Exception:
+            pass
+    return os.environ.get("HF_TOKEN")
 
 MODE_BOTH = "Both (transcription + translation)"
 MODE_TRANSCRIBE = "Transcription only"
@@ -88,7 +99,7 @@ def make_pdf_preview_html(pdf_path):
 def process_job(mode, video_file, drive_path, transcript_json_file, transcript_json_path,
                  output_dir_text, source_lang_name, target_lang_name,
                  merge_window, use_qwen_correction, hf_token_input):
-    output_dir = Path((output_dir_text or "/content/drive/MyDrive/fypoutput/").strip())
+    output_dir = Path((output_dir_text or DEFAULT_OUTPUT_DIR).strip())
     output_dir.mkdir(parents=True, exist_ok=True)
     dataset_df = None
     input_stem = None
@@ -99,20 +110,15 @@ def process_job(mode, video_file, drive_path, transcript_json_file, transcript_j
         elif drive_path and drive_path.strip():
             input_path = Path(drive_path.strip())
         else:
-            yield "Upload an mp4, or paste a path to one already in your Drive.", None, make_pdf_preview_html(None)
+            yield "Upload an mp4, or paste a path to one already on disk.", None, make_pdf_preview_html(None)
             return
         if not input_path.exists():
             yield f"File not found: {input_path}", None, make_pdf_preview_html(None)
             return
         input_stem = input_path.stem
-        hf_token = hf_token_input.strip() if hf_token_input else None
+        hf_token = get_hf_token(hf_token_input)
         if not hf_token:
-            try:
-                hf_token = userdata.get("HF_TOKEN")
-            except Exception:
-                hf_token = None
-        if not hf_token:
-            yield "No HF token found. Paste one above, or add HF_TOKEN in Colab Secrets.", None, make_pdf_preview_html(None)
+            yield "No HF token found. Paste one above, set the HF_TOKEN environment variable, or add it to Colab Secrets.", None, make_pdf_preview_html(None)
             return
         source_selected = get_lang_by_name(source_lang_name)
         config = {
@@ -124,7 +130,7 @@ def process_job(mode, video_file, drive_path, transcript_json_file, transcript_j
             "translation_max_new_tokens": 256,
             "use_qwen_correction": use_qwen_correction,
         }
-        yield "Extracting audio, diarizing, transcribing with Whisper... (see logs below this cell)", None, make_pdf_preview_html(None)
+        yield "Extracting audio, diarizing, transcribing with Whisper... (see logs in the terminal/cell)", None, make_pdf_preview_html(None)
         dataset_df, dataset_json_out = run_transcription(input_path, output_dir, hf_token, source_selected, config)
         if mode == MODE_TRANSCRIBE:
             yield f"Transcription done. Saved to: {dataset_json_out}", str(dataset_json_out), make_pdf_preview_html(None)
@@ -180,19 +186,19 @@ with gr.Blocks(title="TATRO App") as demo:
             # sources=["upload"] disables the webcam-capture tab so this is
             # a plain file picker, not a "click to access webcam" prompt.
             video_input = gr.Video(label="Video file (.mp4) — plays here once uploaded", sources=["upload"])
-            drive_path_box = gr.Textbox(label="OR: path to file already in Drive", placeholder="/content/drive/MyDrive/hebrew/video.mp4")
-        hf_token_box = gr.Textbox(label="HF Token (leave blank to use Colab Secrets)", type="password")
+            drive_path_box = gr.Textbox(label="OR: path to file already on disk", placeholder="/path/to/video.mp4")
+        hf_token_box = gr.Textbox(label="HF Token (leave blank to use HF_TOKEN env var / Colab Secrets)", type="password")
     with gr.Group(visible=False) as translation_only_group:
         with gr.Row():
             transcript_json_input = gr.File(label="Transcript dataset JSON (from a prior transcription-only run)", file_types=[".json"])
-            transcript_json_path_box = gr.Textbox(label="OR: path to that JSON already in Drive")
+            transcript_json_path_box = gr.Textbox(label="OR: path to that JSON already on disk")
     with gr.Row():
         source_dd = gr.Dropdown(["Hebrew", "Arabic", "English", "French"], label="Spoken language", value="Hebrew")
         target_dd = gr.Dropdown(["Hebrew", "Arabic", "English", "French"], label="Translate into", value="Arabic")
     with gr.Row():
         merge_slider = gr.Slider(1, 6, value=3, step=1, label="Speaker-island merge window")
         correction_check = gr.Checkbox(label="Use Qwen ASR correction (slower)", value=False)
-    output_dir_box = gr.Textbox(label="Output folder", value="/content/drive/MyDrive/fypoutput/")
+    output_dir_box = gr.Textbox(label="Output folder", value=DEFAULT_OUTPUT_DIR)
     run_btn = gr.Button("Run", variant="primary")
     status_box = gr.Textbox(label="Status", interactive=False)
     file_output = gr.File(label="Output file")
@@ -223,12 +229,7 @@ with gr.Blocks(title="TATRO App") as demo:
     chat_input.submit(chatbot_stub, inputs=[chat_input, chatbot], outputs=[chatbot, chat_input])
 
 # allowed_paths lets the PDF iframe/link actually load the file — Gradio
-# blocks serving anything outside these folders by default. Add any other
-# Drive folder here if you point Output folder somewhere else.
-#
-# NOTE: this line runs as soon as this file's cell runs. At that point
-# run_transcription/run_translation don't exist yet if you haven't run
-# transcription.py / translation.py yet — that's fine, the app just won't
-# be able to actually process anything until you have (click Run in the
-# browser only after all four files have been run once).
-demo.launch(share=True, debug=True, allowed_paths=["/content/drive/MyDrive/"])
+# blocks serving anything outside these folders by default. Add your own
+# output folder here if you set Output folder to somewhere else.
+if __name__ == "__main__":
+    demo.launch(share=True, debug=True, allowed_paths=ALLOWED_PDF_PATHS)

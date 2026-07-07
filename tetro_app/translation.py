@@ -2,10 +2,52 @@
 # translation.py — Script 2
 # Qwen translation + PDF export: translate_dataframe_with_qwen(...),
 # save_final_translation_pdf(...), run_translation(...).
-# Run app.py's cell first (installs + imports), then transcription.py's
-# cell (this file calls qwen_generate, load_qwen_model, and save_json,
-# which are defined there).
+#
+# Works both run locally and pasted into its own Colab cell. Imports
+# qwen_generate, load_qwen_model, and save_json from transcription.py,
+# which needs to be in the same folder (or already run, in Colab).
 # ============================================================
+from pathlib import Path
+from html import escape
+
+import torch
+import arabic_reshaper
+from bidi.algorithm import get_display
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.lib.enums import TA_RIGHT, TA_LEFT
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+from transcription import qwen_generate, load_qwen_model, save_json
+
+# DejaVu Sans is what the PDF is built with (it covers Hebrew/Arabic/Latin
+# glyphs). Colab/most Linux boxes have it after `apt-get install
+# fonts-dejavu-core`; this checks a few common locations so the script
+# doesn't only work on one OS.
+_FONT_SEARCH_DIRS = [
+    "/usr/share/fonts/truetype/dejavu",   # Debian/Ubuntu, Colab
+    "/usr/share/fonts/dejavu",            # Fedora/RHEL
+    "/usr/local/share/fonts",
+    str(Path.home() / ".fonts"),
+    str(Path.home() / "Library/Fonts"),   # macOS
+]
+
+def _find_font_path(filename):
+    for directory in _FONT_SEARCH_DIRS:
+        candidate = Path(directory) / filename
+        if candidate.exists():
+            return str(candidate)
+    raise FileNotFoundError(
+        f"Could not find {filename}. Install the DejaVu fonts — "
+        "`apt-get install fonts-dejavu-core` on Linux/Colab, or download "
+        "DejaVu Sans from dejavu-fonts.github.io on Windows/Mac and drop it "
+        "in one of: " + ", ".join(_FONT_SEARCH_DIRS)
+    )
 
 def translate_text_with_qwen(tokenizer, model, text, source_lang_name, target_lang_name, max_new_tokens=256):
     text = str(text).strip()
@@ -60,8 +102,8 @@ def prepare_pdf_text(text, is_rtl):
     return escape(text)
 
 def save_final_translation_pdf(df, path, title, target_column, target_is_rtl, target_lang_name):
-    pdfmetrics.registerFont(TTFont("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
-    pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
+    pdfmetrics.registerFont(TTFont("DejaVuSans", _find_font_path("DejaVuSans.ttf")))
+    pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", _find_font_path("DejaVuSans-Bold.ttf")))
     doc = SimpleDocTemplate(str(path), pagesize=letter, leftMargin=2 * cm, rightMargin=2 * cm,
                              topMargin=2 * cm, bottomMargin=2 * cm)
     styles = getSampleStyleSheet()

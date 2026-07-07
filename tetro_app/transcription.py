@@ -2,10 +2,24 @@
 # transcription.py — Script 1
 # Whisper transcription + speaker diarization: language dictionary,
 # audio/diarization helpers, run_transcription(...).
-# Run app.py's cell first — it installs the dependencies and imports
-# everything (torch, pandas, Pipeline, WhisperModel, etc.) that the
-# functions below need.
+#
+# Self-contained module — works both run locally (`python main.py` /
+# `python app.py`) and pasted into its own Colab cell. Needs the
+# packages in requirements.txt installed, plus ffmpeg on PATH.
 # ============================================================
+import os
+import re
+import json
+import subprocess
+import tempfile
+import gc
+from pathlib import Path
+
+import torch
+import pandas as pd
+from pyannote.audio import Pipeline
+from faster_whisper import WhisperModel
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # ============================================================
 # LANGUAGE DICTIONARY
